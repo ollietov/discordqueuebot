@@ -105,7 +105,8 @@ app.post('/interactions', verifyKeyMiddleware(process.env.PUBLIC_KEY), async fun
   if (type === InteractionType.MESSAGE_COMPONENT) {
     const componentId = data.custom_id;
 
-    if (componentId.startsWith('accept'))
+    if (componentId.startsWith('accept_button_')) {
+      console.log('Accept button interacted with');
   }
 
 
