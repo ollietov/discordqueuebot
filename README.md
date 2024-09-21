@@ -13,6 +13,7 @@ A Discord bot that creates and manages game queues for different roles, built wi
 ## Overview
 
 This bot allows Discord server members to create and manage game queues for specific game roles. It runs on Cloudflares workers and the queues are stored using Cloudflare KV.
+This bot is currently in 4 private servers.
 
 ## Features
 
