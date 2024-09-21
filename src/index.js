@@ -23,12 +23,14 @@ class JsonResponse extends Response {
 const router = AutoRouter();
 const queues = {};
 
-function cleanupOldQueues() {
+async function cleanupOldQueues(env) {
   const oneHourAgo = Date.now() - 60 * 60 * 1000; // 1 hour in milliseconds
-  for (const [queueId, queue] of Object.entries(queues)) {
-    if (queue.createdAt < oneHourAgo) {
-      delete queues[queueId];
-      console.log(`Deleted old queue: ${queueId}`);
+  const list = await env.QUEUES.list();
+  for (const key of list.keys) {
+    const queue = await env.QUEUES.get(key.name, 'json');
+    if (queue && queue.createdAt < oneHourAgo) {
+      await env.QUEUES.delete(key.name);
+      console.log(`Deleted old queue: ${key.name}`);
     }
   }
 }
@@ -86,27 +88,19 @@ router.post('/', async (request, env) => {
     const { name } = data;
     console.log("APPLICATION COMMAND");
     if (name === 'queue' && id) {
-      // Respond immediately to avoid timeout
-      console.log("QUEUE COMMAND");
       // Process the command asynchronously
       const userId = member?.user?.id || user?.id;
       const objectName = data.options[0].value;
       const isSilent = data.options[1]?.value ?? false;
       console.log(`User <@${userId}> created queue for role ${objectName}. Silent: ${isSilent}`);
       const queueId = id;
-      console.log("QUEUE ID", queueId);
-      console.log("Created at", Date.now());
-      if (!queues[queueId]) {
-        queues[queueId] = {
-          accept: [userId],
-          decline: [],
-          tentative: [],
-          createdAt: Date.now()
-        };
+      const queue = {
+        accept: [userId],
+        decline: [],
+        tentative: [],
+        createdAt: Date.now()
       }
-      console.log("QUEUE ID", queueId);
-      console.log("GUILD ID", guild_id);
-      console.log("OBJECT NAME", objectName);
+      await env.QUEUES.put(queueId, JSON.stringify(queue));
       const roleColour = await getRoleColour(guild_id, objectName);
 
       const messageData = {
@@ -122,22 +116,22 @@ router.post('/', async (request, env) => {
             fields: [
               {
                 name: "Accept ✅",
-                value: queues[queueId].accept.length > 0
-                  ? queues[queueId].accept.map(id => `<@${id}>`).join('\n')
+                value: queue.accept.length > 0
+                  ? queue.accept.map(id => `<@${id}>`).join('\n')
                   : "No one",
                 inline: true
               },
               {
                 name: "Decline ❌",
-                value: queues[queueId].decline.length > 0
-                  ? queues[queueId].decline.map(id => `<@${id}>`).join('\n')
+                value: queue.decline.length > 0
+                  ? queue.decline.map(id => `<@${id}>`).join('\n')
                   : "No one",
                 inline: true
               },
               {
                 name: "Tentative ❔",
-                value: queues[queueId].tentative.length > 0
-                  ? queues[queueId].tentative.map(id => `<@${id}>`).join('\n')
+                value: queue.tentative.length > 0
+                  ? queue.tentative.map(id => `<@${id}>`).join('\n')
                   : "No one",
                 inline: true
               }
@@ -192,7 +186,8 @@ router.post('/', async (request, env) => {
     const userId = member?.user?.id || user?.id;
     const [action, queueId, roleId, Embedcolor] = componentId.split('_');
     console.log(action, queueId, roleId, Embedcolor);
-    if (!queues[queueId]) {
+    const queue = await env.QUEUES.get(queueId, 'json');
+    if (!queue) {
       return new JsonResponse({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
@@ -204,24 +199,24 @@ router.post('/', async (request, env) => {
     switch (action) {
       case 'acceptbutton':
         console.log(`User <@${userId}> clicked accept`);
-        queues[queueId].accept = [...queues[queueId].accept.filter(id => id !== userId), userId];
-        queues[queueId].decline = queues[queueId].decline.filter(id => id !== userId);
-        queues[queueId].tentative = queues[queueId].tentative.filter(id => id !== userId);
+        queue.accept = [...queue.accept.filter(id => id !== userId), userId];
+        queue.decline = queue.decline.filter(id => id !== userId);
+        queue.tentative = queue.tentative.filter(id => id !== userId);
         break;
       case 'declinebutton':
         console.log(`User <@${userId}> clicked decline`, '');
-        queues[queueId].decline = [...queues[queueId].decline.filter(id => id !== userId), userId];
-        queues[queueId].accept = queues[queueId].accept.filter(id => id !== userId);
-        queues[queueId].tentative = queues[queueId].tentative.filter(id => id !== userId);
+        queue.decline = [...queue.decline.filter(id => id !== userId), userId];
+        queue.accept = queue.accept.filter(id => id !== userId);
+        queue.tentative = queue.tentative.filter(id => id !== userId);
         break;
       case 'tentbutton':
         console.log(`User <@${userId}> clicked tentative`, '');
-        queues[queueId].tentative = [...queues[queueId].tentative.filter(id => id !== userId), userId];
-        queues[queueId].accept = queues[queueId].accept.filter(id => id !== userId);
-        queues[queueId].decline = queues[queueId].decline.filter(id => id !== userId);
+        queue.tentative = [...queue.tentative.filter(id => id !== userId), userId];
+        queue.accept = queue.accept.filter(id => id !== userId);
+        queue.decline = queue.decline.filter(id => id !== userId);
         break;
     }
-    console.log(queues[queueId]);
+    await env.QUEUES.put(queueId, JSON.stringify(queue));
     try {
       return new JsonResponse({
         type: InteractionResponseType.UPDATE_MESSAGE,
@@ -234,22 +229,22 @@ router.post('/', async (request, env) => {
               fields: [
                 {
                   name: "Accept ✅",
-                  value: queues[queueId].accept.length > 0
-                    ? queues[queueId].accept.map(id => `<@${id}>`).join('\n')
+                  value: queue.accept.length > 0
+                    ? queue.accept.map(id => `<@${id}>`).join('\n')
                     : "No one",
                   inline: true
                 },
                 {
                   name: "Decline ❌",
-                  value: queues[queueId].decline.length > 0
-                    ? queues[queueId].decline.map(id => `<@${id}>`).join('\n')
+                  value: queue.decline.length > 0
+                    ? queue.decline.map(id => `<@${id}>`).join('\n')
                     : "No one",
                   inline: true
                 },
                 {
                   name: "Tentative ❔",
-                  value: queues[queueId].tentative.length > 0
-                    ? queues[queueId].tentative.map(id => `<@${id}>`).join('\n')
+                  value: queue.tentative.length > 0
+                    ? queue.tentative.map(id => `<@${id}>`).join('\n')
                     : "No one",
                   inline: true
                 }
