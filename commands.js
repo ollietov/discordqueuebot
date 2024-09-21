@@ -16,22 +16,6 @@ function createCommandChoices() {
   return commandChoices;
 }
 
-// Simple test command
-const TEST_COMMAND = {
-  name: 'test',
-  description: 'Basic command',
-  type: 1,
-  integration_types: [0, 1],
-  contexts: [0, 1, 2],
-};
-
-const NEW_COMMAND = {
-  name: 'new',
-  description: 'Basic command for further testing',
-  type: 1,
-  integration_types: [0, 1],
-  contexts: [0, 1, 2],
-};
 
 // Command containing options
 
@@ -52,6 +36,6 @@ const QUEUE_COMMAND = {
   contexts: [0, 2],
 };
 
-const ALL_COMMANDS = [TEST_COMMAND, NEW_COMMAND, QUEUE_COMMAND];
+const ALL_COMMANDS = [QUEUE_COMMAND];
 
 InstallGlobalCommands(process.env.APP_ID, ALL_COMMANDS);

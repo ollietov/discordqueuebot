@@ -23,10 +23,41 @@ class JsonResponse extends Response {
 const router = AutoRouter();
 const queues = {};
 
-async function getRoleColour(guildId, roleId) {
-  // Implement this function to fetch role color from Discord API
-  // For now, returning a default color
-  return 0x00ff00;
+function cleanupOldQueues() {
+  const oneHourAgo = Date.now() - 60 * 60 * 1000; // 1 hour in milliseconds
+  for (const [queueId, queue] of Object.entries(queues)) {
+    if (queue.createdAt < oneHourAgo) {
+      delete queues[queueId];
+      console.log(`Deleted old queue: ${queueId}`);
+    }
+  }
+}
+
+
+async function getRoleColour(guildId, roleId, env) {
+  try {
+    if (!guildId || !roleId) {
+      throw new Error('Invalid guildId or roleId');
+    }
+    console.log("GETTING ROLE COLOUR");
+    const url = `https://discord.com/api/v10/guilds/${guildId}/roles`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bot ${env.DISCORD_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const roles = await response.json();
+    const role = roles.find(r => r.id === roleId);
+    return role ? role.color : 0;
+  } catch (error) {
+    console.error('Error fetching role color:', error);
+    return 0; // Default color if there's an error
+  }
 }
 
 router.get('/', (request, env) => {
@@ -34,6 +65,7 @@ router.get('/', (request, env) => {
 });
 
 router.post('/', async (request, env) => {
+  cleanupOldQueues();
   const { isValid, interaction } = await server.verifyDiscordRequest(
     request,
     env,
@@ -42,7 +74,7 @@ router.post('/', async (request, env) => {
     return new Response('Bad request signature.', { status: 401 });
   }
 
-  const { type, data, id, member, user, guild_id } = interaction;
+  const { type, data, id, member, user, guild_id, token } = interaction;
 
   if (type === InteractionType.PING) {
     return new JsonResponse({
@@ -52,94 +84,107 @@ router.post('/', async (request, env) => {
 
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
-
+    console.log("APPLICATION COMMAND");
     if (name === 'queue' && id) {
-      const context = interaction.context;
-      const userId = context === 0 ? member.user.id : user.id;
+      // Respond immediately to avoid timeout
+      console.log("QUEUE COMMAND");
+      // Process the command asynchronously
+      const userId = member?.user?.id || user?.id;
       const objectName = data.options[0].value;
-      console.log(`User <@${userId}> created message`);
+      const isSilent = data.options[1]?.value ?? false;
+      console.log(`User <@${userId}> created queue for role ${objectName}. Silent: ${isSilent}`);
       const queueId = id;
+      console.log("QUEUE ID", queueId);
+      console.log("Created at", Date.now());
       if (!queues[queueId]) {
         queues[queueId] = {
           accept: [userId],
           decline: [],
           tentative: [],
+          createdAt: Date.now()
         };
       }
+      console.log("QUEUE ID", queueId);
+      console.log("GUILD ID", guild_id);
+      console.log("OBJECT NAME", objectName);
       const roleColour = await getRoleColour(guild_id, objectName);
 
+      const messageData = {
+        content: `<@&${objectName}>`,
+        allowed_mentions:  isSilent
+          ? { parse: []}
+          : { parse: ["roles"] },
+        embeds: [
+          {
+            title: `Game queue`,
+            description: `<@&${objectName}>`,
+            color: roleColour,
+            fields: [
+              {
+                name: "Accept ✅",
+                value: queues[queueId].accept.length > 0
+                  ? queues[queueId].accept.map(id => `<@${id}>`).join('\n')
+                  : "No one",
+                inline: true
+              },
+              {
+                name: "Decline ❌",
+                value: queues[queueId].decline.length > 0
+                  ? queues[queueId].decline.map(id => `<@${id}>`).join('\n')
+                  : "No one",
+                inline: true
+              },
+              {
+                name: "Tentative ❔",
+                value: queues[queueId].tentative.length > 0
+                  ? queues[queueId].tentative.map(id => `<@${id}>`).join('\n')
+                  : "No one",
+                inline: true
+              }
+            ],
+            footer: {
+              text: "Join the queue by clicking the buttons below!"
+            },
+            timestamp: new Date().toISOString()
+          }
+        ],
+        components: [
+          {
+            type: MessageComponentTypes.ACTION_ROW,
+            components: [
+              {
+                type: MessageComponentTypes.BUTTON,
+                custom_id: `acceptbutton_${queueId}_${objectName}_${roleColour}`,
+                label: 'Accept ✅',
+                style: ButtonStyleTypes.SUCCESS,
+              },
+              {
+                type: MessageComponentTypes.BUTTON,
+                custom_id: `declinebutton_${queueId}_${objectName}_${roleColour}`,
+                label: 'Decline ❌',
+                style: ButtonStyleTypes.DANGER,
+              },
+              {
+                type: MessageComponentTypes.BUTTON,
+                custom_id: `tentbutton_${queueId}_${objectName}_${roleColour}`,
+                label: 'Tentative ❔',
+                style: ButtonStyleTypes.SECONDARY,
+              },
+            ],
+          },
+        ],
+      };
       return new JsonResponse({
         type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
         data: {
-          content: `<@&${objectName}>`,
-          allowed_mentions: {
-            parse: ["roles"]
-          },
-          embeds: [
-            {
-              title: `Game queue`,
-              description: `<@&${objectName}>`,
-              color: roleColour,
-              fields: [
-                {
-                  name: "Accept ✅",
-                  value: queues[queueId].accept.length > 0
-                    ? queues[queueId].accept.map(id => `<@${id}>`).join('\n')
-                    : "No one",
-                  inline: true
-                },
-                {
-                  name: "Decline ❌",
-                  value: queues[queueId].decline.length > 0
-                    ? queues[queueId].decline.map(id => `<@${id}>`).join('\n')
-                    : "No one",
-                  inline: true
-                },
-                {
-                  name: "Tentative ❔",
-                  value: queues[queueId].tentative.length > 0
-                    ? queues[queueId].tentative.map(id => `<@${id}>`).join('\n')
-                    : "No one",
-                  inline: true
-                }
-              ],
-              footer: {
-                text: "Join the queue by clicking the buttons below!"
-              },
-              timestamp: new Date().toISOString()
-            }
-          ],
-          components: [
-            {
-              type: MessageComponentTypes.ACTION_ROW,
-              components: [
-                {
-                  type: MessageComponentTypes.BUTTON,
-                  custom_id: `acceptbutton_${queueId}_${objectName}_${roleColour}`,
-                  label: 'Accept ✅',
-                  style: ButtonStyleTypes.SUCCESS,
-                },
-                {
-                  type: MessageComponentTypes.BUTTON,
-                  custom_id: `declinebutton_${queueId}_${objectName}_${roleColour}`,
-                  label: 'Decline ❌',
-                  style: ButtonStyleTypes.DANGER,
-                },
-                {
-                  type: MessageComponentTypes.BUTTON,
-                  custom_id: `tentbutton_${queueId}_${objectName}_${roleColour}`,
-                  label: 'Tentative ❔',
-                  style: ButtonStyleTypes.SECONDARY,
-                },
-              ],
-            },
-          ],
+          content: messageData.content,
+          allowed_mentions: messageData.allowed_mentions,
+          embeds: messageData.embeds,
+          components: messageData.components,
         },
       });
     }
 
-    console.error(`unknown command: ${name}`);
-    return new JsonResponse({ error: 'unknown command' }, { status: 400 });
   }
 
   if (type === InteractionType.MESSAGE_COMPONENT) {
@@ -148,7 +193,13 @@ router.post('/', async (request, env) => {
     const [action, queueId, roleId, Embedcolor] = componentId.split('_');
     console.log(action, queueId, roleId, Embedcolor);
     if (!queues[queueId]) {
-      return new JsonResponse({ error: 'Queue not found' }, { status: 400 });
+      return new JsonResponse({
+        type: InteractionResponseType.CHANNEL_MESSAGE_WITH_SOURCE,
+        data: {
+          content: "This queue has expired. Please create a new one.",
+          flags: 64 // Ephemeral flag
+        }
+      });
     }
     switch (action) {
       case 'acceptbutton':
@@ -158,13 +209,13 @@ router.post('/', async (request, env) => {
         queues[queueId].tentative = queues[queueId].tentative.filter(id => id !== userId);
         break;
       case 'declinebutton':
-        console.log(`User <@${userId}> clicked decline`,'');
+        console.log(`User <@${userId}> clicked decline`, '');
         queues[queueId].decline = [...queues[queueId].decline.filter(id => id !== userId), userId];
         queues[queueId].accept = queues[queueId].accept.filter(id => id !== userId);
         queues[queueId].tentative = queues[queueId].tentative.filter(id => id !== userId);
         break;
       case 'tentbutton':
-        console.log(`User <@${userId}> clicked tentative`,'');
+        console.log(`User <@${userId}> clicked tentative`, '');
         queues[queueId].tentative = [...queues[queueId].tentative.filter(id => id !== userId), userId];
         queues[queueId].accept = queues[queueId].accept.filter(id => id !== userId);
         queues[queueId].decline = queues[queueId].decline.filter(id => id !== userId);
@@ -202,11 +253,13 @@ router.post('/', async (request, env) => {
                     : "No one",
                   inline: true
                 }
-              ]
+              ],
+              footer: {
+                text: "Join the queue by clicking the buttons below!"
+              },
+              timestamp: new Date().toISOString()
             }
           ],
-
-          
         }
       });
     } catch (err) {
