@@ -16,6 +16,8 @@
   "author": "Shay DeWael",
   "license": "MIT",
   "dependencies": {
+    "@discordjs/rest": "^2.4.0",
+    "discord-api-types": "^0.37.100",
     "discord-interactions": "^4.1.0",
     "dotenv": "^16.0.3",
     "express": "^4.18.2",

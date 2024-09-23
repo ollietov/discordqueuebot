@@ -39,9 +39,11 @@ async function cleanupOldQueues(env) {
 async function getRoleColour(guildId, roleId, env) {
   try {
     if (!guildId || !roleId) {
-      throw new Error('Invalid guildId or roleId');
+      console.error('Invalid guildId or roleId:', { guildId, roleId });
+      return 0; // Default to black
     }
-    console.log("GETTING ROLE COLOUR");
+    
+    console.log("Fetching role colour for:", { guildId, roleId });
     const url = `https://discord.com/api/v10/guilds/${guildId}/roles`;
     const response = await fetch(url, {
       method: 'GET',
@@ -50,15 +52,27 @@ async function getRoleColour(guildId, roleId, env) {
         'Content-Type': 'application/json',
       },
     });
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const errorText = await response.text();
+      console.error(`HTTP error! status: ${response.status}, body: ${errorText}`);
+      return 0; // Default to black
     }
+
     const roles = await response.json();
+    console.log("Fetched roles:", roles);
+
     const role = roles.find(r => r.id === roleId);
-    return role ? role.color : 0;
+    if (!role) {
+      console.error('Role not found:', roleId);
+      return 0; // Default to black
+    }
+
+    console.log("Found role:", role);
+    return role.color || 0; // Return 0 (black) if color is falsy
   } catch (error) {
-    console.error('Error fetching role color:', error);
-    return 0; // Default color if there's an error
+    console.error('Error in getRoleColour:', error);
+    return 0; // Default to black
   }
 }
 
@@ -91,7 +105,10 @@ router.post('/', async (request, env) => {
       // Process the command asynchronously
       const userId = member?.user?.id || user?.id;
       const objectName = data.options[0].value;
-      const isSilent = data.options[1]?.value ?? false;
+      const isSilentOption = data.options.find(opt => opt.name === 'silent');
+      const isSilent = isSilentOption ? isSilentOption.value : false;
+      const voiceChannelOption = data.options.find(opt => opt.name === 'voice_channel');
+      const voiceChannelId = voiceChannelOption ? voiceChannelOption.value : null;
       console.log(`User <@${userId}> created queue for role ${objectName}. Silent: ${isSilent}`);
       const queueId = id;
       const queue = {
@@ -101,7 +118,7 @@ router.post('/', async (request, env) => {
         createdAt: Date.now()
       }
       await env.QUEUES.put(queueId, JSON.stringify(queue));
-      const roleColour = await getRoleColour(guild_id, objectName);
+      const roleColour = await getRoleColour(guild_id, objectName, env);
 
       const messageData = {
         content: `<@&${objectName}>`,
@@ -111,7 +128,7 @@ router.post('/', async (request, env) => {
         embeds: [
           {
             title: `Game queue`,
-            description: `<@&${objectName}>`,
+            description: voiceChannelId ? `<@&${objectName}> in <#${voiceChannelId}>` : `<@&${objectName}>`,
             color: roleColour,
             fields: [
               {
@@ -148,19 +165,19 @@ router.post('/', async (request, env) => {
             components: [
               {
                 type: MessageComponentTypes.BUTTON,
-                custom_id: `acceptbutton_${queueId}_${objectName}_${roleColour}`,
+                custom_id: `acceptbutton_${queueId}_${objectName}_${roleColour}_${voiceChannelId}`,
                 label: 'Accept ✅',
                 style: ButtonStyleTypes.SUCCESS,
               },
               {
                 type: MessageComponentTypes.BUTTON,
-                custom_id: `declinebutton_${queueId}_${objectName}_${roleColour}`,
+                custom_id: `declinebutton_${queueId}_${objectName}_${roleColour}_${voiceChannelId}`,
                 label: 'Decline ❌',
                 style: ButtonStyleTypes.DANGER,
               },
               {
                 type: MessageComponentTypes.BUTTON,
-                custom_id: `tentbutton_${queueId}_${objectName}_${roleColour}`,
+                custom_id: `tentbutton_${queueId}_${objectName}_${roleColour}_${voiceChannelId}`,
                 label: 'Tentative ❔',
                 style: ButtonStyleTypes.SECONDARY,
               },
@@ -184,8 +201,8 @@ router.post('/', async (request, env) => {
   if (type === InteractionType.MESSAGE_COMPONENT) {
     const componentId = data.custom_id;
     const userId = member?.user?.id || user?.id;
-    const [action, queueId, roleId, Embedcolor] = componentId.split('_');
-    console.log(action, queueId, roleId, Embedcolor);
+    const [action, queueId, roleId, Embedcolor, voiceChannel] = componentId.split('_');
+    console.log(action, queueId, roleId, Embedcolor, voiceChannel);
     const queue = await env.QUEUES.get(queueId, 'json');
     if (!queue) {
       return new JsonResponse({
@@ -224,7 +241,7 @@ router.post('/', async (request, env) => {
           embeds: [
             {
               title: `Game queue`,
-              description: `<@&${roleId}>`,
+              description: voiceChannel ? `<@&${roleId}> in <#${voiceChannel}>` : `<@&${roleId}>`,
               color: parseInt(Embedcolor),
               fields: [
                 {
