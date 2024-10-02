@@ -21,20 +21,46 @@ class JsonResponse extends Response {
 }
 
 const router = AutoRouter();
-const queues = {};
 
 async function cleanupOldQueues(env) {
-  const oneHourAgo = Date.now() - 60 * 60 * 1000; // 1 hour in milliseconds
-  const list = await env.QUEUES.list();
-  for (const key of list.keys) {
-    const queue = await env.QUEUES.get(key.name, 'json');
-    if (queue && queue.createdAt < oneHourAgo) {
-      await env.QUEUES.delete(key.name);
-      console.log(`Deleted old queue: ${key.name}`);
+  console.log("Starting cleanup of old queues");
+  const now = Date.now();
+  const twelveHoursAgo = now - (12 * 60 * 60 * 1000);
+
+  try {
+    const listResult = await env.QUEUES.list();
+    if (!listResult.keys.length) {
+      console.log("No queues found");
+      return;
     }
+
+    for (const key of listResult.keys) {
+      try {
+        const queueData = await env.QUEUES.get(key.name, { type: "json" });
+        if (!queueData) {
+          console.log(`No data found for queue: ${key.name}`);
+          continue;
+        }
+
+        const lastUpdateTime = queueData.lastUpdated || queueData.createdAt || 0;
+        if (lastUpdateTime < twelveHoursAgo) {
+          console.log(`Removing old queue: ${key.name}`);
+          await env.QUEUES.delete(key.name);
+        } else if (!queueData.lastUpdated) {
+          queueData.lastUpdated = lastUpdateTime;
+          await env.QUEUES.put(key.name, JSON.stringify(queueData));
+          console.log(`Updated lastUpdated for queue: ${key.name}`);
+        }
+      } catch (error) {
+        console.error(`Error processing queue ${key.name}:`, error);
+      }
+    }
+    
+    console.log("Cleanup of old queues completed");
+  } catch (error) {
+    console.error("Error during cleanup of old queues:", error);
   }
 }
-
 
 async function getRoleColour(guildId, roleId, env) {
   try {
@@ -43,7 +69,7 @@ async function getRoleColour(guildId, roleId, env) {
       return 0; // Default to black
     }
     
-    console.log("Fetching role colour for:", { guildId, roleId });
+    // console.log("Fetching role colour for:", { guildId, roleId });
     const url = `https://discord.com/api/v10/guilds/${guildId}/roles`;
     const response = await fetch(url, {
       method: 'GET',
@@ -60,7 +86,7 @@ async function getRoleColour(guildId, roleId, env) {
     }
 
     const roles = await response.json();
-    console.log("Fetched roles:", roles);
+    //console.log("Fetched roles:", roles);
 
     const role = roles.find(r => r.id === roleId);
     if (!role) {
@@ -81,7 +107,7 @@ router.get('/', (request, env) => {
 });
 
 router.post('/', async (request, env) => {
-  cleanupOldQueues();
+
   const { isValid, interaction } = await server.verifyDiscordRequest(
     request,
     env,
@@ -97,7 +123,7 @@ router.post('/', async (request, env) => {
       type: InteractionResponseType.PONG,
     });
   }
-
+  cleanupOldQueues(env);
   if (type === InteractionType.APPLICATION_COMMAND) {
     const { name } = data;
     console.log("APPLICATION COMMAND");
@@ -115,7 +141,8 @@ router.post('/', async (request, env) => {
         accept: [userId],
         decline: [],
         tentative: [],
-        createdAt: Date.now()
+        createdAt: Date.now(),
+        lastUpdated: Date.now()
       }
       await env.QUEUES.put(queueId, JSON.stringify(queue));
       const roleColour = await getRoleColour(guild_id, objectName, env);
@@ -233,6 +260,7 @@ router.post('/', async (request, env) => {
         queue.decline = queue.decline.filter(id => id !== userId);
         break;
     }
+    queue.lastUpdated = Date.now();
     await env.QUEUES.put(queueId, JSON.stringify(queue));
     try {
       return new JsonResponse({
